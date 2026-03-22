@@ -7,7 +7,7 @@ from typing import Any
 from pyrogram import Client, filters
 from pyrogram.errors import ChannelInvalid, ChannelPrivate, FloodWait, InviteHashExpired, InviteHashInvalid, PeerIdInvalid, UsernameNotOccupied
 from pyrogram.handlers import MessageHandler
-from pyrogram.types import BotCommand, Message
+from pyrogram.types import Message
 
 from database.mongo import MongoRepository
 from services.sender import MessageSender
@@ -21,7 +21,6 @@ class ChannelRouter:
         self.repository = repository
         self.sender = sender
         self._source_map: dict[str, dict[str, Any]] = {}
-        self.user_client: Client | None = None
 
     async def refresh(self) -> list[dict[str, Any]]:
         configs = await self.repository.get_all_channels()
@@ -84,27 +83,30 @@ class ChannelRouter:
         source_map: dict[str, dict[str, Any]] = {}
 
         for config in configs:
-            source = config.get("source_channel")
-            normalized_source = normalize_channel_key(source)
-            if not normalized_source:
-                logger.warning("Skipping channel config with empty source: %s", config)
-                continue
-            if normalized_source.startswith("-100"):
-                logger.warning(
-                    "Source channel %s is stored as a numeric peer id. Prefer @username for more reliable deployments.",
-                    source,
-                )
+            try:
+                source = config.get("source_channel")
+                normalized_source = normalize_channel_key(source)
+                if not normalized_source:
+                    logger.warning("Skipping channel config with empty source: %s", config)
+                    continue
+                if normalized_source.startswith("-100"):
+                    logger.warning(
+                        "Source channel %s is stored as a numeric peer id. Prefer @username for more reliable deployments.",
+                        source,
+                    )
 
-            resolved = await self._ensure_source_access(user_client, config)
-            if not resolved:
-                logger.warning("Skipping inaccessible source channel: %s", source)
-                continue
+                resolved = await self._ensure_source_access(user_client, config)
+                if not resolved:
+                    logger.warning("Skipping inaccessible source channel: %s", source)
+                    continue
 
-            source_map[normalized_source] = config
-            source_map[resolved["chat_id"]] = config
-            if resolved.get("username"):
-                source_map[resolved["username"]] = config
-                source_map[resolved["username"].lstrip("@")] = config
+                source_map[normalized_source] = config
+                source_map[resolved["chat_id"]] = config
+                if resolved.get("username"):
+                    source_map[resolved["username"]] = config
+                    source_map[resolved["username"].lstrip("@")] = config
+            except Exception as exc:
+                logger.exception("Failed to initialize source config safely: %s", exc)
 
         self._source_map = source_map
         logger.info("Initialized %s accessible source channel keys", len(self._source_map))
@@ -124,83 +126,11 @@ class ChannelRouter:
                 return
 
             source_channel = config.get("source_channel")
-            try:
-                await client.get_chat(source_channel)
-            except Exception as exc:
-                logger.warning("Skipping message %s because source %s is not currently accessible: %s", message.id, source_channel, exc)
-                return
-
-            logger.info(
-                "Routing message %s from source %s to destination %s",
-                message.id,
-                source_channel,
-                config.get("destination_channel"),
-            )
+            destination_channel = config.get("destination_channel")
+            logger.info("📤 %s → %s | msg_id=%s", source_channel, destination_channel, message.id)
             await self.sender.send_processed_message(config, message)
         except Exception as exc:
-            logger.exception("Failed to process message %s safely: %s", getattr(message, 'id', 'unknown'), exc)
+            logger.exception("Failed to process message %s safely: %s", getattr(message, "id", "unknown"), exc)
 
-    async def add_channel_command(self, client: Client, message: Message) -> None:
-        args = message.text.split(maxsplit=3)
-        if len(args) < 3:
-            await message.reply_text("Usage: /add_channel <source> <destination> [prefix]")
-            return
-
-        source, destination = args[1], args[2]
-        prefix = args[3] if len(args) == 4 else ""
-        payload = {
-            "source_channel": source,
-            "destination_channel": destination,
-            "edit_settings": {
-                "prefix": prefix,
-                "suffix": "",
-                "replace_words": {},
-                "remove_links": False,
-                "remove_hashtags": False,
-            },
-            "buttons": [],
-            "delay": 0,
-        }
-        await self.repository.add_channel(payload)
-        if self.user_client is not None:
-            await self.initialize_sources(self.user_client)
-        await message.reply_text(f"Added routing from {source} to {destination}")
-
-    async def remove_channel_command(self, client: Client, message: Message) -> None:
-        args = message.text.split(maxsplit=1)
-        if len(args) != 2:
-            await message.reply_text("Usage: /remove_channel <source>")
-            return
-        deleted = await self.repository.remove_channel(args[1])
-        if self.user_client is not None:
-            await self.initialize_sources(self.user_client)
-        if deleted:
-            await message.reply_text(f"Removed routing for {args[1]}")
-        else:
-            await message.reply_text(f"No routing found for {args[1]}")
-
-    async def list_channels_command(self, client: Client, message: Message) -> None:
-        configs = await self.repository.get_all_channels()
-        if not configs:
-            await message.reply_text("No channels configured.")
-            return
-        lines = [
-            f"• {item['source_channel']} ➜ {item['destination_channel']}"
-            for item in configs
-        ]
-        await message.reply_text("Configured channels:\n" + "\n".join(lines))
-
-    async def set_bot_commands(self, bot_client: Client) -> None:
-        commands = [
-            BotCommand("add_channel", "Add a channel route"),
-            BotCommand("remove_channel", "Remove a channel route"),
-            BotCommand("list_channels", "List configured routes"),
-        ]
-        await bot_client.set_bot_commands(commands)
-
-    def register(self, user_client: Client, bot_client: Client) -> None:
-        self.user_client = user_client
+    def register(self, user_client: Client) -> None:
         user_client.add_handler(MessageHandler(self.handle_channel_post, filters.channel))
-        bot_client.add_handler(MessageHandler(self.add_channel_command, filters.command("add_channel") & filters.private))
-        bot_client.add_handler(MessageHandler(self.remove_channel_command, filters.command("remove_channel") & filters.private))
-        bot_client.add_handler(MessageHandler(self.list_channels_command, filters.command("list_channels") & filters.private))

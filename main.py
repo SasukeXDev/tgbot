@@ -14,7 +14,9 @@ from pyrogram import Client
 
 from config import get_settings
 from database.mongo import MongoRepository
+from handlers.commands import CommandHandlerService
 from handlers.message_handler import ChannelRouter
+from services.channel_manager import ChannelManager
 from services.editor import ContentEditor
 from services.sender import MessageSender
 
@@ -64,13 +66,16 @@ async def start_bot(shutdown_event: asyncio.Event) -> None:
     editor = ContentEditor()
     sender = MessageSender(bot_client=bot_client, settings=settings, editor=editor)
     router = ChannelRouter(repository=repository, sender=sender)
-    router.register(user_client, bot_client)
+    channel_manager = ChannelManager(repository=repository, user_client=user_client, bot_client=bot_client)
+    command_handler = CommandHandlerService(manager=channel_manager, on_routes_changed=lambda: router.initialize_sources(user_client))
+    router.register(user_client)
+    command_handler.register(bot_client)
 
     try:
         await user_client.start()
         await bot_client.start()
         await init_channels(user_client, router)
-        await router.set_bot_commands(bot_client)
+        await command_handler.set_bot_commands(bot_client)
         logger.info("Telegram automation bot started in background task")
         await shutdown_event.wait()
     finally:
