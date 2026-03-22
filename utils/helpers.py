@@ -22,13 +22,20 @@ def normalize_channel_key(value: Any) -> str | None:
     return str(value)
 
 
+def is_placeholder_value(value: Any) -> bool:
+    normalized = normalize_channel_key(value)
+    return bool(normalized and normalized.startswith("<") and normalized.endswith(">"))
+
+
 def is_valid_channel(value: Any) -> bool:
     normalized = normalize_channel_key(value)
-    return bool(
-        normalized
-        and normalized != "<destination>"
-        and (normalized.startswith("@") or normalized.startswith("-100"))
-    )
+    if not isinstance(normalized, str) or not normalized or is_placeholder_value(normalized):
+        return False
+    if normalized.startswith("@") and len(normalized) > 5:
+        return True
+    if normalized.startswith("-100") and normalized[1:].isdigit():
+        return True
+    return False
 
 
 def collect_channel_keys(chat_id: int | None, username: str | None) -> set[str]:

@@ -19,7 +19,7 @@ This project is configured for Render with:
 - Message processing for text, photos, videos, and documents.
 - Inline button support.
 - Configurable delay and concurrency controls to reduce spam-limit issues.
-- Admin bot commands for adding, removing, and listing routes.
+- Admin bot commands for start/help/status plus adding, removing, and listing routes.
 - Ready for deployment on Render, Koyeb, VPS, or similar platforms.
 
 ## Project Structure
@@ -33,8 +33,10 @@ project/
 ├── database/
 │   └── mongo.py
 ├── handlers/
+│   ├── commands.py
 │   └── message_handler.py
 ├── services/
+│   ├── channel_manager.py
 │   ├── editor.py
 │   └── sender.py
 ├── utils/
@@ -87,6 +89,8 @@ Create documents inside the `channels` collection like this:
   "source_channel": "@source_username_or_id",
   "destination_channel": "@destination_username_or_id",
   "source_invite_link": "https://t.me/+optionalInviteHash",
+  "filters": {},
+  "edit_options": {},
   "edit_settings": {
     "prefix": "[Edited] ",
     "suffix": "\n\nJoin our network!",
@@ -126,7 +130,10 @@ python main.py
 
 Send these commands to the bot in a private chat:
 
-- `/add_channel <source> <destination> [prefix]`
+- `/start`
+- `/help`
+- `/status`
+- `/add_channel <source> <destination>`
 - `/remove_channel <source>`
 - `/list_channels`
 
